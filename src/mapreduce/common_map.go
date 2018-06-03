@@ -1,7 +1,11 @@
 package mapreduce
 
 import (
+	"encoding/json"
 	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"os"
 )
 
 func doMap(
@@ -50,9 +54,54 @@ func doMap(
 	//     err := enc.Encode(&kv)
 	//
 	// Remember to close the file after you have written all the values!
-	//
-	// Your code here (Part I).
-	//
+
+	/* Read input file */
+	contents, err := ioutil.ReadFile(inFile)
+	if err != nil {
+		log.Printf("doMap: Read File `%s` failed, err is `%v`", inFile, err)
+		return
+	}
+
+	/* Call the user-defined map function (mapF) */
+	mapResult := mapF(inFile, string(contents[:]))
+	if len(mapResult) <= 0 {
+		log.Printf("doMap: length of mapF's result is 0")
+		return
+	}
+
+	/* Partition mapF's output into nReduce files */
+	fileMap := make(map[string][]KeyValue)
+	for _, v := range mapResult {
+		rFile := reduceName(jobName, mapTask, ihash(v.Key)%nReduce)
+		fileMap[rFile] = append(fileMap[rFile], v)
+	}
+
+	/* Write to intermediate files */
+	for fileName, kvList := range fileMap {
+		file, err := os.OpenFile(
+			fileName, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.Printf(
+				"doMap: Create/Open reduce file `%s` failed, err: `%v`",
+				fileName, err)
+			return
+		}
+
+		enc := json.NewEncoder(file)
+		for _, kv := range kvList {
+			err := enc.Encode(&kv)
+			if err != nil {
+				log.Printf(
+					"doMap: Error `%v` when encode `%v` in file `%s`",
+					err, kv, fileName)
+				file.Close()
+				return
+			}
+		}
+
+		log.Printf("doMap: reduce file `%s` write success", fileName)
+		file.Close()
+	}
 }
 
 func ihash(s string) int {

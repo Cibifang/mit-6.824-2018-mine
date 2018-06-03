@@ -1,5 +1,12 @@
 package mapreduce
 
+import (
+	"encoding/json"
+	"log"
+	"os"
+	"sort"
+)
+
 func doReduce(
 	jobName string, // the name of the whole MapReduce job
 	reduceTask int, // which reduce task this is
@@ -41,7 +48,65 @@ func doReduce(
 	// 	enc.Encode(KeyValue{key, reduceF(...)})
 	// }
 	// file.Close()
-	//
-	// Your code here (Part I).
-	//
+
+	kvMap := make(map[string][]string)
+
+	/* Read intermediate files */
+	for m := 0; m < nMap; m++ {
+		fileName := reduceName(jobName, m, reduceTask)
+		file, err := os.Open(fileName)
+		if err != nil {
+			log.Printf(
+				"doReduce: open file `%s` failed, err: `%v`", fileName, err)
+			return
+		}
+
+		dec := json.NewDecoder(file)
+		for dec.More() {
+			var kv KeyValue
+			err := dec.Decode(&kv)
+			if err != nil {
+				log.Printf(
+					"doReduce: decode feil `%s` failed, err: `%v`",
+					fileName, err)
+				file.Close()
+				return
+			}
+
+			kvMap[kv.Key] = append(kvMap[kv.Key], kv.Value)
+		}
+
+		file.Close()
+	}
+
+	/* Sort keys */
+	kList := make([]string, 0)
+	for key := range kvMap {
+		kList = append(kList, key)
+	}
+	sort.Strings(kList)
+
+	/* Create/Open output file */
+	outF, err := os.OpenFile(outFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Printf(
+			"doReduce: open outFile `%s` failed, err: `%v`", outFile, err)
+		return
+	}
+
+	/* Write to output file */
+	enc := json.NewEncoder(outF)
+	for _, key := range kList {
+		err := enc.Encode(KeyValue{key, reduceF(key, kvMap[key])})
+		if err != nil {
+			log.Printf(
+				"doReduce: Error `%v` when encode `%v` in outfile `%s`",
+				err, KeyValue{key, reduceF(key, kvMap[key])}, outFile)
+			outF.Close()
+			return
+		}
+	}
+
+	log.Printf("doReduce: out file `%s` write success", outFile)
+	outF.Close()
 }
