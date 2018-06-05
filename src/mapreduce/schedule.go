@@ -35,6 +35,7 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	// have completed successfully, schedule() should return.
 
 	freeWorker := make(chan string)
+	failedTasks := make(chan DoTaskArgs)
 	for taskNum := 0; taskNum < ntasks; taskNum++ {
 		taskGroup.Add(1)
 		task := DoTaskArgs{
@@ -48,25 +49,47 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 
 		select {
 		case worker := <-registerChan:
-			go doTask(worker, task, freeWorker)
+			go doTask(worker, task, freeWorker, failedTasks)
 		case worker := <-freeWorker:
-			go doTask(worker, task, freeWorker)
+			go doTask(worker, task, freeWorker, failedTasks)
 		}
 	}
 
-	taskGroup.Wait()
+	end := make(chan bool)
+	go taskEnd(end)
+
+loop:
+	for {
+		select {
+		case task := <-failedTasks:
+			select {
+			case worker := <-registerChan:
+				go doTask(worker, task, freeWorker, failedTasks)
+			case worker := <-freeWorker:
+				go doTask(worker, task, freeWorker, failedTasks)
+			}
+		case <-end:
+			break loop
+		}
+	}
 
 	fmt.Printf("Schedule: %v done\n", phase)
 }
 
-func doTask(workerAddr string, task DoTaskArgs, freeWorker chan string) {
+func doTask(workerAddr string, task DoTaskArgs, freeWorker chan string, failedTasks chan DoTaskArgs) {
 	if !call(workerAddr, "Worker.DoTask", task, nil) {
 		log.Printf(
 			"doTask: worker %s failed to exec task `%v`",
 			workerAddr, task)
+		failedTasks <- task
 		return
 	}
 
 	taskGroup.Done()
 	freeWorker <- workerAddr
+}
+
+func taskEnd(end chan bool) {
+	taskGroup.Wait()
+	end <- true
 }
